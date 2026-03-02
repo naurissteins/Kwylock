@@ -1,5 +1,5 @@
 use crate::adapters::Authenticator;
-use crate::domain::LockState;
+use crate::domain::{AuthDecision, AuthGuard, LockState};
 use anyhow::{Context, Result};
 use kwylock_common::ipc::{DaemonToUi, UiToDaemon};
 use std::fs;
@@ -51,9 +51,16 @@ impl IpcServer {
         lock_state: &Arc<Mutex<LockState>>,
         authenticator: &dyn Authenticator,
         unlock_session: &dyn Fn() -> Result<()>,
+        auth_guard: &mut AuthGuard,
     ) -> Result<()> {
         match self.listener.accept() {
-            Ok((stream, _addr)) => handle_client(stream, lock_state, authenticator, unlock_session),
+            Ok((stream, _addr)) => handle_client(
+                stream,
+                lock_state,
+                authenticator,
+                unlock_session,
+                auth_guard,
+            ),
             Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
             Err(err) => Err(err).context("IPC accept failed"),
         }
@@ -91,6 +98,7 @@ fn handle_client(
     lock_state: &Arc<Mutex<LockState>>,
     authenticator: &dyn Authenticator,
     unlock_session: &dyn Fn() -> Result<()>,
+    auth_guard: &mut AuthGuard,
 ) -> Result<()> {
     let mut reader = BufReader::new(stream);
     let mut request = String::new();
@@ -103,9 +111,13 @@ fn handle_client(
         .context("failed deserializing UI->daemon IPC message")?;
 
     let response = match request {
-        UiToDaemon::UnlockAttempt { password } => {
-            handle_unlock_attempt(password, lock_state, authenticator, unlock_session)
-        }
+        UiToDaemon::UnlockAttempt { password } => handle_unlock_attempt(
+            password,
+            lock_state,
+            authenticator,
+            unlock_session,
+            auth_guard,
+        ),
     };
 
     let stream = reader.get_mut();
@@ -122,6 +134,7 @@ fn handle_unlock_attempt(
     lock_state: &Arc<Mutex<LockState>>,
     authenticator: &dyn Authenticator,
     unlock_session: &dyn Fn() -> Result<()>,
+    auth_guard: &mut AuthGuard,
 ) -> DaemonToUi {
     let currently_locked = match lock_state.lock() {
         Ok(state) => *state == LockState::Locked,
@@ -136,6 +149,15 @@ fn handle_unlock_attempt(
         return DaemonToUi::UnlockFailed {
             reason: "session is not marked locked".to_string(),
         };
+    }
+
+    match auth_guard.precheck() {
+        AuthDecision::Allowed => {}
+        decision => {
+            return DaemonToUi::UnlockFailed {
+                reason: decision_reason(decision),
+            };
+        }
     }
 
     let accepted = match authenticator.verify_password(&password) {
@@ -157,6 +179,7 @@ fn handle_unlock_attempt(
     };
 
     if accepted {
+        auth_guard.record_success();
         match unlock_session() {
             Ok(()) => {
                 *state = LockState::Unlocked;
@@ -179,5 +202,34 @@ fn handle_unlock_attempt(
 
     *state = LockState::Locked;
     info!(user = %authenticator.username(), "unlock rejected by PAM");
-    DaemonToUi::UnlockRejected
+    match auth_guard.record_failure() {
+        AuthDecision::Allowed => DaemonToUi::UnlockRejected,
+        decision => DaemonToUi::UnlockFailed {
+            reason: decision_reason(decision),
+        },
+    }
+}
+
+fn decision_reason(decision: AuthDecision) -> String {
+    match decision {
+        AuthDecision::Allowed => "authentication allowed".to_string(),
+        AuthDecision::RetryAfter(remaining) => {
+            format!("too many attempts, retry in {}s", ceil_seconds(remaining))
+        }
+        AuthDecision::LockedOut(remaining) => {
+            format!(
+                "temporary lockout active, retry in {}s",
+                ceil_seconds(remaining)
+            )
+        }
+    }
+}
+
+fn ceil_seconds(duration: std::time::Duration) -> u64 {
+    let seconds = duration.as_secs();
+    if duration.subsec_nanos() > 0 {
+        seconds.saturating_add(1)
+    } else {
+        seconds
+    }
 }

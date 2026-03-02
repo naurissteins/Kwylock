@@ -1,25 +1,24 @@
 use anyhow::{Context, Result};
 use std::env;
-use std::path::PathBuf;
 use std::process::{Child, Command};
 use tracing::{info, warn};
 
 pub struct UiProcessManager {
     child: Option<Child>,
-    ui_binary: PathBuf,
+    ui_command: Vec<String>,
 }
 
 impl Default for UiProcessManager {
     fn default() -> Self {
-        Self::new()
+        Self::new(Vec::new())
     }
 }
 
 impl UiProcessManager {
-    pub fn new() -> Self {
+    pub fn new(config_command: Vec<String>) -> Self {
         Self {
             child: None,
-            ui_binary: resolve_ui_binary_path(),
+            ui_command: resolve_ui_command(config_command),
         }
     }
 
@@ -29,18 +28,27 @@ impl UiProcessManager {
             return Ok(());
         }
 
-        let mut command = Command::new(&self.ui_binary);
+        let (program, args) = self
+            .ui_command
+            .split_first()
+            .context("UI command is empty; set daemon.ui_command in config")?;
+
+        let mut command = Command::new(program);
+        command.args(args);
         if env::var_os("GDK_BACKEND").is_none() {
             command.env("GDK_BACKEND", "wayland");
         }
 
-        let child = command
-            .spawn()
-            .with_context(|| format!("failed spawning UI binary {}", self.ui_binary.display()))?;
+        let child = command.spawn().with_context(|| {
+            format!(
+                "failed spawning UI command {}",
+                format_ui_command(&self.ui_command)
+            )
+        })?;
 
         info!(
             pid = child.id(),
-            binary = %self.ui_binary.display(),
+            command = %format_ui_command(&self.ui_command),
             "UI process started"
         );
         self.child = Some(child);
@@ -83,17 +91,18 @@ impl UiProcessManager {
     }
 }
 
-fn resolve_ui_binary_path() -> PathBuf {
+fn resolve_ui_command(config_command: Vec<String>) -> Vec<String> {
     if let Some(path) = env::var_os("KWYLOCK_UI_BIN") {
-        return PathBuf::from(path);
+        return vec![path.to_string_lossy().into_owned()];
     }
 
-    if let Ok(current_exe) = env::current_exe() {
-        let sibling = current_exe.with_file_name("kwylock-ui");
-        if sibling.exists() {
-            return sibling;
-        }
+    if !config_command.is_empty() {
+        return config_command;
     }
 
-    PathBuf::from("kwylock-ui")
+    vec!["kwylock-ui".to_string()]
+}
+
+fn format_ui_command(command: &[String]) -> String {
+    command.join(" ")
 }

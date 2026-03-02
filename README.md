@@ -24,6 +24,7 @@ What is implemented today:
 - Daemon requests `logind` session unlock on successful PAM auth
 - logind signal subscription for `Lock`, `Unlock`, and `PrepareForSleep`
 - Daemon spawns UI on lock signal and tears it down on unlock signal
+- Auth hardening: retry backoff and temporary lockout on repeated failures
 
 ## Requirements (Arch Linux)
 
@@ -59,6 +60,31 @@ Manual UI run is still available for debugging:
 
 ```bash
 GDK_BACKEND=wayland cargo run -p kwylock-ui
+```
+
+## Configuration
+
+Default path:
+- `$XDG_CONFIG_HOME/kwylock/config.toml`
+- Fallback: `~/.config/kwylock/config.toml`
+
+Example:
+
+```toml
+[daemon]
+ui_command = ["/home/ns/kwimy/Kwylock/Kwylock/target/debug/kwylock-ui"]
+
+[daemon.auth]
+max_failures_before_lockout = 5
+initial_backoff_ms = 1000
+max_backoff_ms = 30000
+lockout_seconds = 60
+```
+
+Optional override for config path:
+
+```bash
+KWYLOCK_CONFIG=/path/to/config.toml cargo run -p kwylock-daemon --bin kwylock-daemon
 ```
 
 ## Workspace Layout

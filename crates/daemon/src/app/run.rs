@@ -1,6 +1,7 @@
 use crate::adapters::{IpcServer, LogindSessionAdapter, LogindSignal, PamAuthenticator};
+use crate::app::config::load_daemon_config;
 use crate::app::ui_process::UiProcessManager;
-use crate::domain::LockState;
+use crate::domain::{AuthGuard, AuthPolicy, LockState};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -12,14 +13,25 @@ pub fn run() -> anyhow::Result<()> {
     init_tracing();
     info!("kwylock-daemon started");
 
+    let daemon_config = load_daemon_config()?;
     let lock_state = Arc::new(Mutex::new(LockState::Unlocked));
     let (signal_tx, signal_rx) = mpsc::channel();
     let authenticator = PamAuthenticator::from_env()?;
-    let mut ui_process = UiProcessManager::new();
+    let mut ui_process = UiProcessManager::new(daemon_config.ui_command.clone());
+    let mut auth_guard = AuthGuard::new(AuthPolicy {
+        max_failures_before_lockout: daemon_config.auth.max_failures_before_lockout,
+        initial_backoff_ms: daemon_config.auth.initial_backoff_ms,
+        max_backoff_ms: daemon_config.auth.max_backoff_ms,
+        lockout_seconds: daemon_config.auth.lockout_seconds,
+    });
 
     let _logind_listener = LogindSessionAdapter::spawn_listener(signal_tx);
     let ipc_server = IpcServer::bind_default()?;
     info!(path = %ipc_server.socket_path().display(), "daemon IPC socket ready");
+    info!(
+        ui_command = %daemon_config.ui_command.join(" "),
+        "daemon UI command configured"
+    );
     info!("IPC server accepting clients");
 
     loop {
@@ -31,6 +43,7 @@ pub fn run() -> anyhow::Result<()> {
             &lock_state,
             &authenticator,
             &LogindSessionAdapter::unlock_current_session,
+            &mut auth_guard,
         ) {
             error!(error = %err, "IPC poll failed");
         }
