@@ -8,7 +8,7 @@ pub fn build_window(app: &gtk::Application) {
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
-        .title("Kwylock Prototype")
+        .title("Kwylock")
         .build();
 
     window.set_widget_name("lock-window");
@@ -28,7 +28,7 @@ pub fn build_window(app: &gtk::Application) {
     let time_label = gtk::Label::new(Some(&crate::state::time_text()));
     time_label.add_css_class("time");
 
-    let subtitle = gtk::Label::new(Some("Wayland/Hyprland GTK4 prototype"));
+    let subtitle = gtk::Label::new(Some("Wayland / Hyprland"));
     subtitle.add_css_class("subtitle");
 
     let password_entry = gtk::Entry::builder()
