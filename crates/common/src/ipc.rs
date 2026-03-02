@@ -11,6 +11,7 @@ pub enum UiToDaemon {
 pub enum DaemonToUi {
     UnlockAccepted,
     UnlockRejected,
+    UnlockFailed { reason: String },
 }
 
 pub fn socket_path() -> PathBuf {

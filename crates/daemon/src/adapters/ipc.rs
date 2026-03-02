@@ -1,4 +1,4 @@
-use crate::adapters::LogindSignal;
+use crate::adapters::Authenticator;
 use crate::domain::LockState;
 use anyhow::{Context, Result};
 use kwylock_common::ipc::{DaemonToUi, UiToDaemon};
@@ -6,11 +6,8 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 pub struct IpcServer {
     listener: UnixListener,
@@ -49,29 +46,16 @@ impl IpcServer {
         &self.socket_path
     }
 
-    pub fn run(
+    pub fn poll(
         &self,
-        lock_state: Arc<Mutex<LockState>>,
-        logind_rx: Receiver<LogindSignal>,
+        lock_state: &Arc<Mutex<LockState>>,
+        authenticator: &dyn Authenticator,
+        unlock_session: &dyn Fn() -> Result<()>,
     ) -> Result<()> {
-        info!("IPC server accepting clients");
-
-        loop {
-            drain_logind_events(&logind_rx, &lock_state);
-
-            match self.listener.accept() {
-                Ok((stream, _addr)) => {
-                    if let Err(err) = handle_client(stream, &lock_state) {
-                        warn!(error = %err, "failed handling IPC client");
-                    }
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(50));
-                }
-                Err(err) => {
-                    return Err(err).context("IPC accept loop failed");
-                }
-            }
+        match self.listener.accept() {
+            Ok((stream, _addr)) => handle_client(stream, lock_state, authenticator, unlock_session),
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
+            Err(err) => Err(err).context("IPC accept failed"),
         }
     }
 }
@@ -102,38 +86,12 @@ fn remove_stale_socket(socket_path: &Path) -> Result<()> {
     }
 }
 
-fn drain_logind_events(logind_rx: &Receiver<LogindSignal>, lock_state: &Arc<Mutex<LockState>>) {
-    while let Ok(signal) = logind_rx.try_recv() {
-        let mut state = match lock_state.lock() {
-            Ok(state) => state,
-            Err(err) => {
-                error!(error = %err, "lock state poisoned");
-                continue;
-            }
-        };
-
-        match signal {
-            LogindSignal::SessionLocked => {
-                *state = LockState::Locked;
-                info!("session lock signal received");
-            }
-            LogindSignal::SessionUnlocked => {
-                *state = LockState::Unlocked;
-                info!("session unlock signal received");
-            }
-            LogindSignal::PrepareForSleep(start) => {
-                if start {
-                    *state = LockState::Locked;
-                    info!("prepare-for-sleep=true; lock state forced to locked");
-                } else {
-                    info!("prepare-for-sleep=false");
-                }
-            }
-        }
-    }
-}
-
-fn handle_client(stream: UnixStream, lock_state: &Arc<Mutex<LockState>>) -> Result<()> {
+fn handle_client(
+    stream: UnixStream,
+    lock_state: &Arc<Mutex<LockState>>,
+    authenticator: &dyn Authenticator,
+    unlock_session: &dyn Fn() -> Result<()>,
+) -> Result<()> {
     let mut reader = BufReader::new(stream);
     let mut request = String::new();
 
@@ -145,7 +103,9 @@ fn handle_client(stream: UnixStream, lock_state: &Arc<Mutex<LockState>>) -> Resu
         .context("failed deserializing UI->daemon IPC message")?;
 
     let response = match request {
-        UiToDaemon::UnlockAttempt { password } => handle_unlock_attempt(password, lock_state),
+        UiToDaemon::UnlockAttempt { password } => {
+            handle_unlock_attempt(password, lock_state, authenticator, unlock_session)
+        }
     };
 
     let stream = reader.get_mut();
@@ -157,25 +117,67 @@ fn handle_client(stream: UnixStream, lock_state: &Arc<Mutex<LockState>>) -> Resu
     stream.flush().context("failed flushing IPC response")
 }
 
-fn handle_unlock_attempt(password: String, lock_state: &Arc<Mutex<LockState>>) -> DaemonToUi {
-    // Temporary prototype policy; this will be replaced with PAM.
-    let accepted = password == "test";
+fn handle_unlock_attempt(
+    password: String,
+    lock_state: &Arc<Mutex<LockState>>,
+    authenticator: &dyn Authenticator,
+    unlock_session: &dyn Fn() -> Result<()>,
+) -> DaemonToUi {
+    let currently_locked = match lock_state.lock() {
+        Ok(state) => *state == LockState::Locked,
+        Err(err) => {
+            return DaemonToUi::UnlockFailed {
+                reason: format!("internal lock state error: {err}"),
+            };
+        }
+    };
 
-    match lock_state.lock() {
-        Ok(mut state) => {
-            if accepted {
+    if !currently_locked {
+        return DaemonToUi::UnlockFailed {
+            reason: "session is not marked locked".to_string(),
+        };
+    }
+
+    let accepted = match authenticator.verify_password(&password) {
+        Ok(value) => value,
+        Err(err) => {
+            return DaemonToUi::UnlockFailed {
+                reason: format!("authentication backend error: {err}"),
+            };
+        }
+    };
+
+    let mut state = match lock_state.lock() {
+        Ok(state) => state,
+        Err(err) => {
+            return DaemonToUi::UnlockFailed {
+                reason: format!("internal lock state error: {err}"),
+            };
+        }
+    };
+
+    if accepted {
+        match unlock_session() {
+            Ok(()) => {
                 *state = LockState::Unlocked;
-                info!("unlock accepted by prototype policy");
-                DaemonToUi::UnlockAccepted
-            } else {
+                info!(user = %authenticator.username(), "unlock accepted by PAM");
+                return DaemonToUi::UnlockAccepted;
+            }
+            Err(err) => {
                 *state = LockState::Locked;
-                info!("unlock rejected by prototype policy");
-                DaemonToUi::UnlockRejected
+                warn!(
+                    error = %err,
+                    user = %authenticator.username(),
+                    "PAM accepted but session unlock request failed"
+                );
+                return DaemonToUi::UnlockFailed {
+                    reason: "authentication succeeded but system unlock request failed".to_string(),
+                };
             }
         }
-        Err(err) => {
-            error!(error = %err, "lock state poisoned while handling unlock attempt");
-            DaemonToUi::UnlockRejected
-        }
     }
+
+    *state = LockState::Locked;
+    info!(user = %authenticator.username(), "unlock rejected by PAM");
+    DaemonToUi::UnlockRejected
 }

@@ -3,6 +3,7 @@ use dbus::blocking::Connection;
 use dbus::message::MatchRule;
 use dbus::{MessageType, Path};
 use std::env;
+use std::process::Command;
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
@@ -34,6 +35,71 @@ impl LogindSessionAdapter {
             }
         })
     }
+
+    pub fn unlock_current_session() -> Result<()> {
+        let session_id = env::var("XDG_SESSION_ID")
+            .ok()
+            .filter(|value| !value.is_empty());
+
+        if let Some(session_id) = &session_id {
+            match unlock_via_dbus(session_id) {
+                Ok(()) => return Ok(()),
+                Err(err) => {
+                    warn!(
+                        session_id = %session_id,
+                        error = %err,
+                        "UnlockSession via D-Bus failed; falling back to loginctl"
+                    );
+                }
+            }
+        } else {
+            warn!(
+                "XDG_SESSION_ID not set; skipping direct D-Bus unlock and using loginctl fallback"
+            );
+        }
+
+        unlock_via_loginctl(session_id.as_deref())
+    }
+}
+
+fn unlock_via_dbus(session_id: &str) -> Result<()> {
+    let connection = Connection::new_system().context("failed connecting to system D-Bus")?;
+    let manager_proxy = connection.with_proxy(
+        LOGIN1_DESTINATION,
+        LOGIN1_MANAGER_PATH,
+        Duration::from_secs(2),
+    );
+
+    let _: () = manager_proxy
+        .method_call(LOGIN1_MANAGER_INTERFACE, "UnlockSession", (session_id,))
+        .with_context(|| format!("UnlockSession({session_id}) failed"))?;
+
+    info!(session_id = %session_id, "unlock request sent to logind");
+    Ok(())
+}
+
+fn unlock_via_loginctl(session_id: Option<&str>) -> Result<()> {
+    let mut command = Command::new("loginctl");
+    command.arg("unlock-session");
+
+    if let Some(session_id) = session_id {
+        command.arg(session_id);
+    }
+
+    let output = command
+        .output()
+        .context("failed executing loginctl unlock-session")?;
+    if output.status.success() {
+        info!("unlock request sent via loginctl fallback");
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(anyhow::anyhow!(
+        "loginctl unlock-session failed with status {}: {}",
+        output.status,
+        stderr.trim()
+    ))
 }
 
 fn listen_blocking(signal_tx: Sender<LogindSignal>) -> Result<()> {

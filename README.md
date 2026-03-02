@@ -20,8 +20,10 @@ It is **not yet a secure production lockscreen** because full lock orchestration
 What is implemented today:
 - Daemon Unix-socket IPC (`$XDG_RUNTIME_DIR/kwylock/daemon.sock`)
 - UI unlock requests sent to daemon
-- Daemon-controlled unlock accept/reject response
+- Daemon-controlled PAM unlock accept/reject response
+- Daemon requests `logind` session unlock on successful PAM auth
 - logind signal subscription for `Lock`, `Unlock`, and `PrepareForSleep`
+- Daemon spawns UI on lock signal and tears it down on unlock signal
 
 ## Requirements (Arch Linux)
 
@@ -45,20 +47,19 @@ cd /home/ns/kwimy/Kwylock/Kwylock
 cargo run -p kwylock-daemon --bin kwylock-daemon
 ```
 
-In another terminal, start UI:
+Trigger lock (daemon will spawn UI automatically):
 
 ```bash
-cd /home/ns/kwimy/Kwylock/Kwylock
-GDK_BACKEND=wayland ./target/release/kwylock-ui
+loginctl lock-session
 ```
 
-If the release binary does not exist yet, run:
+Unlock with your normal Linux account password (PAM `login` service).
+
+Manual UI run is still available for debugging:
 
 ```bash
 GDK_BACKEND=wayland cargo run -p kwylock-ui
 ```
-
-Prototype unlock password for current test build: `test`
 
 ## Workspace Layout
 
@@ -69,6 +70,6 @@ Prototype unlock password for current test build: `test`
 ## Roadmap (Short)
 
 1. Add layer-shell output surfaces.
-2. Add daemon with logind lock/unlock handling.
-3. Add PAM authentication integration.
-4. Add weather/sysinfo/config/theming polish.
+2. Add instant non-GTK curtain stage.
+3. Add widget/config/theming polish.
+4. Harden auth UX (retry backoff and failure feedback).

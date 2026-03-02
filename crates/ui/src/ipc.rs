@@ -6,6 +6,7 @@ use std::time::Duration;
 pub enum UnlockResult {
     Accepted,
     Rejected,
+    Failed(String),
     TransportError(String),
 }
 
@@ -47,6 +48,7 @@ pub fn unlock_attempt(password: String) -> UnlockResult {
     match serde_json::from_str::<DaemonToUi>(response.trim_end()) {
         Ok(DaemonToUi::UnlockAccepted) => UnlockResult::Accepted,
         Ok(DaemonToUi::UnlockRejected) => UnlockResult::Rejected,
+        Ok(DaemonToUi::UnlockFailed { reason }) => UnlockResult::Failed(reason),
         Err(err) => UnlockResult::TransportError(format!("unable to decode response: {err}")),
     }
 }

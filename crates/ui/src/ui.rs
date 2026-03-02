@@ -61,7 +61,6 @@ pub fn build_window(app: &gtk::Application) {
 
     let result_label = message.clone();
     let result_entry = password_entry.clone();
-    let result_window = window.clone();
     glib::timeout_add_local(Duration::from_millis(50), move || {
         while let Ok(result) = unlock_result_rx.try_recv() {
             result_entry.set_sensitive(true);
@@ -71,14 +70,20 @@ pub fn build_window(app: &gtk::Application) {
                     result_label.remove_css_class("error");
                     result_label.remove_css_class("pending");
                     result_label.add_css_class("ok");
-                    result_label.set_text("Unlock accepted by daemon.");
-                    result_window.close();
+                    result_label.set_text("Authentication accepted. Waiting for session unlock...");
+                    result_entry.set_sensitive(false);
                 }
                 crate::ipc::UnlockResult::Rejected => {
                     result_label.remove_css_class("ok");
                     result_label.remove_css_class("pending");
                     result_label.add_css_class("error");
                     result_label.set_text("Wrong password.");
+                }
+                crate::ipc::UnlockResult::Failed(reason) => {
+                    result_label.remove_css_class("ok");
+                    result_label.remove_css_class("pending");
+                    result_label.add_css_class("error");
+                    result_label.set_text(&format!("Unlock failed: {reason}"));
                 }
                 crate::ipc::UnlockResult::TransportError(err) => {
                     result_label.remove_css_class("ok");

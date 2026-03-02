@@ -529,6 +529,7 @@ dependencies = [
  "anyhow",
  "dbus",
  "kwylock-common",
+ "libc",
  "serde_json",
  "tracing",
  "tracing-subscriber",
