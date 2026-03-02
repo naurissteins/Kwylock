@@ -78,18 +78,21 @@ pub fn build_window(app: &gtk::Application) {
                     result_status.remove_css_class("status-info");
                     result_status.add_css_class("status-warn");
                     result_status.set_text("Invalid password.");
+                    result_entry.grab_focus();
                 }
                 crate::ipc::UnlockResult::Failed(reason) => {
                     result_status.remove_css_class("status-ok");
                     result_status.remove_css_class("status-info");
                     result_status.add_css_class("status-warn");
                     result_status.set_text(&reason);
+                    result_entry.grab_focus();
                 }
                 crate::ipc::UnlockResult::TransportError(_err) => {
                     result_status.remove_css_class("status-ok");
                     result_status.remove_css_class("status-info");
                     result_status.add_css_class("status-warn");
                     result_status.set_text("Cannot reach daemon. Check daemon logs.");
+                    result_entry.grab_focus();
                 }
             }
         }
