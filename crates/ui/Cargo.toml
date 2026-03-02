@@ -1,0 +1,12 @@
+[package]
+name = "kwylock-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Kwylock GTK4 prototype UI"
+publish = false
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+gtk = { package = "gtk4", version = "0.10" }
+

@@ -1,0 +1,39 @@
+#lock-window {
+  background: radial-gradient(circle at center, #1b2030 0%, #090b11 72%);
+}
+
+.title {
+  color: #f3f5ff;
+  font-size: 64px;
+  font-weight: 800;
+}
+
+.time {
+  color: #d4ddff;
+  font-size: 44px;
+  font-weight: 700;
+}
+
+.subtitle {
+  color: #aeb7d9;
+  font-size: 16px;
+}
+
+.password {
+  min-width: 300px;
+  padding: 12px;
+  border-radius: 10px;
+}
+
+.message {
+  font-size: 14px;
+}
+
+.message.ok {
+  color: #98efac;
+}
+
+.message.error {
+  color: #ff9f9f;
+}
+
