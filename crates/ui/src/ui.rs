@@ -1,5 +1,7 @@
 use gtk::prelude::*;
 use gtk::{Align, glib};
+use std::sync::mpsc;
+use std::time::Duration;
 
 pub fn build_window(app: &gtk::Application) {
     crate::style::install();
@@ -55,22 +57,70 @@ pub fn build_window(app: &gtk::Application) {
         glib::ControlFlow::Continue
     });
 
-    let status_label = message.clone();
-    password_entry.connect_activate(move |entry| {
-        let is_valid = entry.text().as_str() == "test";
+    let (unlock_result_tx, unlock_result_rx) = mpsc::channel::<crate::ipc::UnlockResult>();
 
-        if is_valid {
-            status_label.remove_css_class("error");
-            status_label.add_css_class("ok");
-            status_label.set_text("Prototype unlock accepted.");
-        } else {
-            status_label.remove_css_class("ok");
-            status_label.add_css_class("error");
-            status_label.set_text("Wrong password (prototype mode).");
+    let result_label = message.clone();
+    let result_entry = password_entry.clone();
+    let result_window = window.clone();
+    glib::timeout_add_local(Duration::from_millis(50), move || {
+        while let Ok(result) = unlock_result_rx.try_recv() {
+            result_entry.set_sensitive(true);
+
+            match result {
+                crate::ipc::UnlockResult::Accepted => {
+                    result_label.remove_css_class("error");
+                    result_label.remove_css_class("pending");
+                    result_label.add_css_class("ok");
+                    result_label.set_text("Unlock accepted by daemon.");
+                    result_window.close();
+                }
+                crate::ipc::UnlockResult::Rejected => {
+                    result_label.remove_css_class("ok");
+                    result_label.remove_css_class("pending");
+                    result_label.add_css_class("error");
+                    result_label.set_text("Wrong password.");
+                }
+                crate::ipc::UnlockResult::TransportError(err) => {
+                    result_label.remove_css_class("ok");
+                    result_label.remove_css_class("pending");
+                    result_label.add_css_class("error");
+                    result_label.set_text(&format!("IPC error: {err}"));
+                }
+            }
+
+            result_label.set_visible(true);
         }
 
-        status_label.set_visible(true);
+        glib::ControlFlow::Continue
+    });
+
+    let submit_tx = unlock_result_tx.clone();
+    let submit_label = message.clone();
+    password_entry.connect_activate(move |entry| {
+        let password = entry.text().to_string();
+        if password.is_empty() {
+            submit_label.remove_css_class("ok");
+            submit_label.remove_css_class("pending");
+            submit_label.add_css_class("error");
+            submit_label.set_text("Password cannot be empty.");
+            submit_label.set_visible(true);
+            return;
+        }
+
+        submit_label.remove_css_class("ok");
+        submit_label.remove_css_class("error");
+        submit_label.add_css_class("pending");
+        submit_label.set_text("Checking password with daemon...");
+        submit_label.set_visible(true);
+
+        entry.set_sensitive(false);
         entry.set_text("");
+
+        let tx = submit_tx.clone();
+        std::thread::spawn(move || {
+            let result = crate::ipc::unlock_attempt(password);
+            let _ = tx.send(result);
+        });
     });
 
     window.present();

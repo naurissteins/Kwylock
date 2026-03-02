@@ -1,4 +1,5 @@
 mod app;
+mod ipc;
 mod state;
 mod style;
 mod ui;

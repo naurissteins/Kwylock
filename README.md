@@ -17,6 +17,12 @@ The current binary (`kwylock-ui`) is a fullscreen GTK prototype for UI testing.
 It is **not yet a secure production lockscreen** because full lock orchestration
 (daemon + logind + curtain + PAM flow) is still under implementation.
 
+What is implemented today:
+- Daemon Unix-socket IPC (`$XDG_RUNTIME_DIR/kwylock/daemon.sock`)
+- UI unlock requests sent to daemon
+- Daemon-controlled unlock accept/reject response
+- logind signal subscription for `Lock`, `Unlock`, and `PrepareForSleep`
+
 ## Requirements (Arch Linux)
 
 ```bash
@@ -32,6 +38,15 @@ cargo build --release --workspace
 
 ## Run Prototype
 
+Start daemon first:
+
+```bash
+cd /home/ns/kwimy/Kwylock/Kwylock
+cargo run -p kwylock-daemon --bin kwylock-daemon
+```
+
+In another terminal, start UI:
+
 ```bash
 cd /home/ns/kwimy/Kwylock/Kwylock
 GDK_BACKEND=wayland ./target/release/kwylock-ui
@@ -43,16 +58,12 @@ If the release binary does not exist yet, run:
 GDK_BACKEND=wayland cargo run -p kwylock-ui
 ```
 
-Daemon bootstrap (currently scaffold only):
-
-```bash
-cargo run -p kwylock-daemon --bin kwylock-daemon
-```
+Prototype unlock password for current test build: `test`
 
 ## Workspace Layout
 
 - `crates/ui`: GTK4 UI prototype.
-- `crates/daemon`: lock orchestration daemon scaffold.
+- `crates/daemon`: lock orchestration daemon + IPC server + logind listener.
 - `crates/common`: shared config and IPC types.
 
 ## Roadmap (Short)
