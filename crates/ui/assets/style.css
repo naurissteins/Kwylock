@@ -19,24 +19,26 @@
   font-size: 16px;
 }
 
+.status-line {
+  font-size: 14px;
+  font-weight: 600;
+  min-height: 20px;
+}
+
+.status-line.status-info {
+  color: #d7deff;
+}
+
+.status-line.status-ok {
+  color: #98efac;
+}
+
+.status-line.status-warn {
+  color: #ffb4a8;
+}
+
 .password {
   min-width: 300px;
   padding: 12px;
   border-radius: 10px;
-}
-
-.message {
-  font-size: 14px;
-}
-
-.message.ok {
-  color: #98efac;
-}
-
-.message.pending {
-  color: #d7deff;
-}
-
-.message.error {
-  color: #ff9f9f;
 }

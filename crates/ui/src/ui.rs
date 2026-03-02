@@ -31,6 +31,10 @@ pub fn build_window(app: &gtk::Application) {
     let subtitle = gtk::Label::new(Some("Wayland / Hyprland"));
     subtitle.add_css_class("subtitle");
 
+    let status_line = gtk::Label::new(Some("Enter password to unlock."));
+    status_line.add_css_class("status-line");
+    status_line.add_css_class("status-info");
+
     let password_entry = gtk::Entry::builder()
         .placeholder_text("Password")
         .visibility(false)
@@ -39,15 +43,11 @@ pub fn build_window(app: &gtk::Application) {
     password_entry.set_input_purpose(gtk::InputPurpose::Password);
     password_entry.add_css_class("password");
 
-    let message = gtk::Label::new(None);
-    message.add_css_class("message");
-    message.set_visible(false);
-
     root.append(&title);
     root.append(&time_label);
     root.append(&subtitle);
+    root.append(&status_line);
     root.append(&password_entry);
-    root.append(&message);
 
     window.set_child(Some(&root));
 
@@ -59,7 +59,7 @@ pub fn build_window(app: &gtk::Application) {
 
     let (unlock_result_tx, unlock_result_rx) = mpsc::channel::<crate::ipc::UnlockResult>();
 
-    let result_label = message.clone();
+    let result_status = status_line.clone();
     let result_entry = password_entry.clone();
     glib::timeout_add_local(Duration::from_millis(50), move || {
         while let Ok(result) = unlock_result_rx.try_recv() {
@@ -67,56 +67,52 @@ pub fn build_window(app: &gtk::Application) {
 
             match result {
                 crate::ipc::UnlockResult::Accepted => {
-                    result_label.remove_css_class("error");
-                    result_label.remove_css_class("pending");
-                    result_label.add_css_class("ok");
-                    result_label.set_text("Authentication accepted. Waiting for session unlock...");
+                    result_status.remove_css_class("status-warn");
+                    result_status.remove_css_class("status-info");
+                    result_status.add_css_class("status-ok");
+                    result_status.set_text("Password accepted. Waiting for session unlock...");
                     result_entry.set_sensitive(false);
                 }
                 crate::ipc::UnlockResult::Rejected => {
-                    result_label.remove_css_class("ok");
-                    result_label.remove_css_class("pending");
-                    result_label.add_css_class("error");
-                    result_label.set_text("Wrong password.");
+                    result_status.remove_css_class("status-ok");
+                    result_status.remove_css_class("status-info");
+                    result_status.add_css_class("status-warn");
+                    result_status.set_text("Invalid password.");
                 }
                 crate::ipc::UnlockResult::Failed(reason) => {
-                    result_label.remove_css_class("ok");
-                    result_label.remove_css_class("pending");
-                    result_label.add_css_class("error");
-                    result_label.set_text(&format!("Unlock failed: {reason}"));
+                    result_status.remove_css_class("status-ok");
+                    result_status.remove_css_class("status-info");
+                    result_status.add_css_class("status-warn");
+                    result_status.set_text(&reason);
                 }
-                crate::ipc::UnlockResult::TransportError(err) => {
-                    result_label.remove_css_class("ok");
-                    result_label.remove_css_class("pending");
-                    result_label.add_css_class("error");
-                    result_label.set_text(&format!("IPC error: {err}"));
+                crate::ipc::UnlockResult::TransportError(_err) => {
+                    result_status.remove_css_class("status-ok");
+                    result_status.remove_css_class("status-info");
+                    result_status.add_css_class("status-warn");
+                    result_status.set_text("Cannot reach daemon. Check daemon logs.");
                 }
             }
-
-            result_label.set_visible(true);
         }
 
         glib::ControlFlow::Continue
     });
 
     let submit_tx = unlock_result_tx.clone();
-    let submit_label = message.clone();
+    let submit_status = status_line.clone();
     password_entry.connect_activate(move |entry| {
         let password = entry.text().to_string();
         if password.is_empty() {
-            submit_label.remove_css_class("ok");
-            submit_label.remove_css_class("pending");
-            submit_label.add_css_class("error");
-            submit_label.set_text("Password cannot be empty.");
-            submit_label.set_visible(true);
+            submit_status.remove_css_class("status-ok");
+            submit_status.remove_css_class("status-info");
+            submit_status.add_css_class("status-warn");
+            submit_status.set_text("Password is required.");
             return;
         }
 
-        submit_label.remove_css_class("ok");
-        submit_label.remove_css_class("error");
-        submit_label.add_css_class("pending");
-        submit_label.set_text("Checking password with daemon...");
-        submit_label.set_visible(true);
+        submit_status.remove_css_class("status-ok");
+        submit_status.remove_css_class("status-warn");
+        submit_status.add_css_class("status-info");
+        submit_status.set_text("Checking credentials...");
 
         entry.set_sensitive(false);
         entry.set_text("");
